@@ -11,11 +11,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
       - name: Install m68k cross toolchain, pyelftools, amitools
         run: |
           sudo apt-get update
           sudo apt-get install -y gcc-m68k-linux-gnu binutils-m68k-linux-gnu
-          pip install pyelftools machine68k amitools
+          pip install pyelftools greenlet machine68k amitools
       - name: Build xprpunter.library
         run: sh build.sh
       - name: Protocol engine tests (native, against a reference peer)

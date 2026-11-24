@@ -1,0 +1,56 @@
+name: build
+on:
+  push:
+    branches: ['**']
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install m68k cross toolchain, pyelftools, amitools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-m68k-linux-gnu binutils-m68k-linux-gnu
+          pip install pyelftools greenlet machine68k amitools
+      - name: Build xprpunter.library
+        run: sh build.sh
+      - name: Protocol engine tests (native, against a reference peer)
+        run: sh test/run_native.sh
+      - name: Library tests (real hunk library under vamos)
+        # vamos exits non-zero on its own shutdown warnings, so judge by the harness verdict.
+        run: |
+          sh test/run_vamos.sh 2>&1 | tee vamos.txt || true
+          grep -q "HARNESS: ALL PASSED" vamos.txt
+      - name: Package
+        run: |
+          VER=$(grep -o 'xprpunter.library [0-9][0-9.]*' src/libhead.S | head -1 | cut -d' ' -f2)
+          mkdir -p dist/pkg/Libs
+          cp dist/xprpunter.library dist/pkg/Libs/
+          mkdir -p dist/pkg/relay
+          cp relay/tnproxy.py dist/pkg/relay/
+          cp README.md LICENSE dist/pkg/
+          (cd dist/pkg && zip -qr ../xprpunter-${VER:-dev}.zip .)
+          rm -rf dist/pkg
+          cp relay/tnproxy.py dist/tnproxy.py
+          ls -l dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: xprpunter
+          path: dist/
+      - name: Release (every push to main)
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: build-${{ github.run_number }}
+          name: Build ${{ github.run_number }}
+          target_commitish: ${{ github.sha }}
+          make_latest: true
+          generate_release_notes: true
+          files: dist/*
