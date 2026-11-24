@@ -15,7 +15,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y gcc-m68k-linux-gnu binutils-m68k-linux-gnu
-          pip install pyelftools amitools
+          pip install pyelftools machine68k amitools
       - name: Build xprpunter.library
         run: sh build.sh
       - name: Protocol engine tests (native, against a reference peer)
