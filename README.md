@@ -37,17 +37,17 @@ C-Net versions, so treat the field names as a guide.
    | Name | `Punter` |
    | Unique ID | `P` (any unused single letter) |
    | Library Name | `xprpunter.library` |
-   | Environment | `TP,B100,W60` |
+   | Environment | `TP,B255,W60` |
    | Batch | OFF |
    | Resumable | OFF |
 
    Save and use the configuration.
-4. **Optional: a second entry for batch downloads** with the environment `TP,B100,W60,M` and Batch ON,
+4. **Optional: a second entry for batch downloads** with the environment `TP,B255,W60,M` and Batch ON,
    under a different name and unique ID (for example `Multi-Punter`, `M`). Use it only for multi-file
    downloads to terminals that support them (Dialtone). Do not put `M` on the entry you use for
    single-file transfers. I did not verify how C-Net treats the Batch flag for this entry, so check that
    setting on your own system.
-5. **Test with logging first.** Add `L` to the environment string (`TP,B100,W60,L`) for the first
+5. **Test with logging first.** Add `L` to the environment string (`TP,B255,W60,L`) for the first
    transfers and look at the log (below).
 
 ### Environment string
@@ -57,14 +57,14 @@ A comma-separated list, case-insensitive. Everything is optional.
 | Option | Meaning |
 |---|---|
 | `TP` / `TS` / `TA` | File type announced to the terminal: PRG, SEQ, or automatic (SEQ for text-like extensions, otherwise PRG) |
-| `Bnnn` | Punter block size in bytes. Default 100 |
+| `Bnnn` | Punter block size in bytes, including the 7-byte header, 16 to 255. Default 255 (the protocol maximum). Smaller blocks only help on noisy links |
 | `Wnn` | Seconds to wait for the receiver to start, 5 to 600. Default 60 |
 | `L` | Write a diagnostic log (see below) |
 | `M` | Multi-Punter batch framing on send |
 | `M2` | Like `M` plus four NUL bytes after the tabs. Experimental; it did not fix the CCGMS problem |
 | `Dn`, `Kn` | Output pacing: pause `n` ticks (1/50 s) after every `K` bytes. Only for marginal links; it hurts at turbo speeds |
 
-A good starting string is `TP,B100,W60`.
+A good starting string is `TP,B255,W60`.
 
 ### Diagnostic log
 
