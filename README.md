@@ -15,12 +15,46 @@ release containing `xprpunter.library` and a zip with the same file.
 |---|---|---|
 | Download from the BBS, single file | works | works |
 | Upload to the BBS, single file | works | works |
-| Download, multiple files (`M`) | **does not work** (a bug in CCGMS, see below) | works |
+| Download, multiple files (`M`) | works with the [chrpai/ccgmsterm](https://github.com/chrpai/ccgmsterm) `dev` branch; **fails** in older CCGMS (see below) | works |
 | Upload, multiple files | not implemented | not implemented |
 
 Verified runs: a 12 KB file and a 254 KB file (2,734 blocks, zero errors) downloaded to Dialtone in one
-batch; single files both ways with CCGMS at 1 to 2 MHz and 9600 baud. At 4 MHz and above CCGMS works but
-retries blocks; at 32 MHz and 38400 baud it completes with many retries.
+batch; single files both ways with CCGMS at 1 to 2 MHz and 9600 baud. Stock CCGMS retries blocks at 4 MHz
+and above; the chrpai/ccgmsterm `dev` branch fixes that (see [Speed](#speed)).
+
+## Speed
+
+Measured with a 254 KB file at 64 MHz on a C64 Ultimate, using the chrpai/ccgmsterm `dev` branch over its
+Ultimate Net modem (TCP straight to the BBS, no relay), with a block size of 255:
+
+| Setup | CPS |
+|---|---|
+| Starting point | 1,895 |
+| ccgmsterm PR #8 plus the patched `telnetd.device` | about 13,500 |
+| Also ccgmsterm PR #9 | about 16,800 |
+| For comparison: the `punterserv.py` PC server, same C64 | 10,046 at 16 MHz, 12,961 at 64 MHz |
+
+What made the difference, on each side:
+
+* **Block size 255** (`B255`, the default). The protocol maximum. A 12 KB file goes from 132 blocks at
+  `B100` to about 50, so every per-block cost (handshakes, round trips, reads) is paid far fewer times.
+  The library already defaulted to 255; the old `B100` in the setup steps was what held it back.
+* **The patched `telnetd.device`** ([`telnetd-patch/`](telnetd-patch/)). It sets `TCP_NODELAY` on each
+  accepted connection, and it replaces the telnet-mode send routine. The original split every write at
+  each `0xFF` so it could double it, and every Punter block contains at least one `0xFF` (the next-block
+  size byte), so a block went out as 3 to 4 TCP segments. The new routine doubles into a 512-byte buffer
+  and calls `send()` once. An earlier build with only the `TCP_NODELAY` change
+  (`telnetd-nodelay-only.device`) is the fallback if the full patch misbehaves.
+* **ccgmsterm, on the `dev` branch of [chrpai/ccgmsterm](https://github.com/chrpai/ccgmsterm):**
+  * PR #6: Punter timeouts count jiffies (1/60 s) instead of loop iterations, so they no longer get
+    shorter as the CPU gets faster. This is what fixed the retries above 4 MHz.
+  * PR #8: on Ultimate Net, no handshake pauses, no parked UCI reads, and the disk write overlaps the
+    handshake.
+  * PR #9: a whole 255-byte block fits in one UCI read.
+  * The Multi-Punter header fix (below).
+
+This library sends each block with one `xpr_swrite` call, and each 3-byte token with one more. It never
+splits a write unless pacing (`D`) is on.
 
 ## Installing it in C-Net
 
@@ -81,7 +115,9 @@ blocks contain arbitrary bytes, so any `0xFF` in a transfer is corrupted by a cl
 telnet-aware.
 
 * **Dialtone** is telnet-aware, so it connects directly.
-* **CCGMS through the C64 Ultimate's modem emulation** is not. The C64 Ultimate's modem layer passes
+* **The chrpai/ccgmsterm `dev` branch** has an **IAC Escape** option (F7 screen, key `I`) that does the
+  telnet doubling itself, so with its Ultimate Net modem it dials the BBS directly with no relay.
+* **Stock CCGMS through the C64 Ultimate's modem emulation** is not. The C64 Ultimate's modem layer passes
   raw bytes and its documentation does not mention telnet handling. For CCGMS, run the relay in
   [`relay/tnproxy.py`](relay/tnproxy.py) on the PC that hosts WinUAE. It answers the telnet negotiation,
   removes the doubling in both directions, and gives the C64 a clean 8-bit stream:
@@ -91,7 +127,8 @@ telnet-aware.
   Then dial the relay's address and port from the C64. `-v` logs every chunk in hex.
 
 `telnetd.device` is closed source (shareware; the author keeps the copyright), and as far as I could
-tell it has no raw mode, which is why the relay exists. Another way to get a raw line would be to use
+tell it has no raw mode, which is why the relay exists. The binary patch in [`telnetd-patch/`](telnetd-patch/)
+speeds it up (see [Speed](#speed)) but does not add a raw mode. Another way to get a raw line would be to use
 WinUAE's serial-over-TCP port instead of `telnetd.device`; that was not tried.
 
 ## Multi-Punter (batch download)
@@ -113,7 +150,7 @@ After the last file it sends the end marker: 16 TAB, 16 Ctrl-D, CR.
 This framing is the same one Dialtone accepted in testing. Multi-Punter variants differ between terminals,
 so another program's batch mode may not be compatible.
 
-### Why CCGMS Multi-Receive fails
+### Why CCGMS Multi-Receive fails (fixed in chrpai/ccgmsterm)
 
 CCGMS reads the header in a tight loop and, when no byte is waiting, `rs232_get` returns with the **carry
 flag set** and the accumulator left unchanged. The multi-receive loop in `multixfer.s` never checks the
@@ -122,10 +159,10 @@ every empty poll appends a bogus "character" to the filename. After about 18 of 
 comma before the file type fails and CCGMS leaves multi-receive. The sender can't fix this: the header
 bytes have to arrive without gaps relative to the CPU's polling speed, which a 1 MHz CPU at 38400 baud
 cannot do. The one-line symptom is the screen reading "Waiting for header..." and then dropping out to the
-terminal, with the rest of the header showing up as plain text. The fix is three added `bcs` lines in
-CCGMS's `multixfer.s`, after each `jsr rs232_get`; this has not been built or sent upstream. This is my
-reading of the CCGMS source plus the observed behaviour, not something I confirmed by running a patched
-CCGMS.
+terminal, with the rest of the header showing up as plain text. The header loops ignored the carry flag and
+stored the last byte again. The fix, checking the carry after each `jsr rs232_get` in `multixfer.s`, is on
+the `dev` branch of [chrpai/ccgmsterm](https://github.com/chrpai/ccgmsterm). Older CCGMS builds still have
+the bug.
 
 ## Punter, as implemented
 
@@ -154,7 +191,9 @@ These cost the most time, in roughly the order they bit.
 * **CCGMS timeouts are counted in loop iterations, not time**, so they get shorter as the CPU gets
   faster. At 1 to 2 MHz and 9600 baud it is clean. At 4 MHz it starts to lose blocks; at 32 MHz it
   completes but about one block in two needs a retry. Slowing the sender with pacing made turbo-speed runs
-  worse, not better, because CCGMS was already impatient.
+  worse, not better, because CCGMS was already impatient. ccgmsterm PR #6 fixed this by counting jiffies.
+* **Count TCP segments, not just bytes.** Over telnet, how a block is cut into packets mattered more than
+  the line speed. `telnetd.device` split each block at every `0xFF`, which was invisible in the byte log.
 * **Retries can look like failure.** A 131-block file with 114 retries still arrives correct. Count
   `RESULT` lines, not warnings.
 * **An old library stays in memory.** If a change appears to have no effect, run `Avail FLUSH`.
@@ -187,6 +226,7 @@ run by the `HARNESS: ALL PASSED` line instead of the exit status.
     tools/            linker scripts and the ELF-to-Amiga-hunk converter
     test/             native and vamos test harnesses
     relay/tnproxy.py  raw-to-telnet relay for terminals that are not telnet-aware
+    telnetd-patch/    TCP_NODELAY and single-send patch for telnetd.device v1.91 (script and tests only)
 
 ## Troubleshooting
 
@@ -197,7 +237,8 @@ run by the `HARNESS: ALL PASSED` line instead of the exit status.
 | Many `BAD` replies, transfer slow | CCGMS at a fast CPU speed, or a lossy line. Try 1 to 2 MHz and 9600 baud, and no pacing |
 | Corrupt files only when they contain `FF` bytes | Telnet doubling reached a non-telnet terminal. Use the relay |
 | New library has no effect | The old one is still in memory. `Avail FLUSH` and restart the node |
-| Batch download leaves CCGMS on "Waiting for header" | The CCGMS bug above; use Dialtone for batches |
+| Batch download leaves CCGMS on "Waiting for header" | The CCGMS bug above. Use the chrpai/ccgmsterm `dev` build, or Dialtone |
+| Log shows `blocksize=100` | The Environment string still has `B100`. Use `B255` or leave `B` out |
 
 ## Credits and license
 
